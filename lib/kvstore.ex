@@ -14,13 +14,18 @@ defmodule KVstore do
 
   defdelegate create(key, value, ttl \\ @ttl), to: KVstore.Storage
 
+  defdelegate get_ttl(key), to: KVstore.Storage
+
+  defdelegate exec_ttl(), to: KVstore.Storage
+
   def create(key), do: create(key, key, @ttl)
 
   @impl true
   def init(_) do
     children = [
       Plug.Adapters.Cowboy.child_spec(:http, KVstore.Router, [], port: @port),
-      worker(KVstore.Storage, [], restart: :permanent)
+      worker(KVstore.Storage, [], restart: :permanent),
+      worker(KVstore.TTLworker, [], restart: :permanent)
     ]
     supervise(children, strategy: :one_for_one)
   end

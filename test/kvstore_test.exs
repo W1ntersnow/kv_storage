@@ -20,6 +20,26 @@ defmodule KVstore.Test do
       assert response.resp_body == ""
     end
 
+    test "upd row with list value" do
+      response = call_post_method("key_for_list", [4,5,6])
+      assert response.status == 201
+
+      :timer.sleep(@lag)
+
+      response = call_get_method("key_for_list")
+      assert response.resp_body == <<4,5,6>>
+
+      :timer.sleep(@lag)
+
+      response = call_patch_method("key_for_list", [4,5,6,7])
+      assert response.status == 201
+
+      :timer.sleep(@lag)
+
+      response = call_get_method("key_for_list")
+      assert response.resp_body == <<4,5,6,7>>
+    end
+
     test "upd row with no change ttl" do
       response = call_post_method("no_change_ttl_key", "no_change_ttl_value")
       assert response.status == 201
@@ -34,7 +54,7 @@ defmodule KVstore.Test do
       response = call_get_method("no_change_ttl_key")
       assert response.resp_body == "updated_no_change_ttl_value"
 
-      :timer.sleep(@ttl + 5)
+      :timer.sleep(@ttl + @lag)
 
       response = call_get_method("no_change_ttl_key")
       assert response.resp_body == ""
@@ -49,12 +69,12 @@ defmodule KVstore.Test do
       response = call_patch_method("change_ttl_key", "change_ttl_value", @ttl * 2)
       assert response.status == 201
 
-      :timer.sleep(@ttl + 5)
+      :timer.sleep(@ttl + @lag)
 
       response = call_get_method("change_ttl_key")
       assert response.resp_body == "change_ttl_value"
 
-      :timer.sleep(@ttl + 5)
+      :timer.sleep(@ttl + @lag)
 
       response = call_get_method("change_ttl_key")
       assert response.resp_body == ""
@@ -79,6 +99,26 @@ defmodule KVstore.Test do
       response = call_get_method("del_existing_row_key")
       assert response.status == 200
       assert response.resp_body == ""
+    end
+
+    test "duplicate create" do
+      response = call_post_method("original_key", "original_value")
+      assert response.status == 201
+
+      :timer.sleep(@lag)
+
+      response = call_get_method("original_key")
+      assert response.resp_body == "original_value"
+
+      :timer.sleep(@lag)
+
+      response = call_post_method("original_key", "not_original_value")
+      assert response.status == 201
+
+      :timer.sleep(@lag)
+
+      response = call_get_method("original_key")
+      assert response.resp_body == "original_value"
     end
 
     test "nonexistent row" do

@@ -1,10 +1,10 @@
 defmodule KVstore.Storage do
   use GenServer
   require Logger
+  alias KVstore.TTLworker
 
   @dets_path Application.get_env(:kvstore, :dets_path)
   @autosave Application.get_env(:kvstore, :autosave)
-  @expire_sleep Application.get_env(:kvstore, :expire_sleep)
 
   @impl true
   def init(dets) do
@@ -17,7 +17,6 @@ defmodule KVstore.Storage do
         {:ok, ref} -> ref
         {:error, reason} -> GenServer.stop(__MODULE__, reason)
       end
-    Task.start_link(fn -> expiration_check() end)
     GenServer.start_link(__MODULE__, db, name: __MODULE__)
   end
 
@@ -27,23 +26,6 @@ defmodule KVstore.Storage do
     :dets.sync(dets)
     :dets.close(dets)
     :error
-  end
-
-  defp expiration_check() do
-    GenServer.cast(__MODULE__, :expire)
-    Process.sleep(@expire_sleep)
-    expiration_check()
-  end
-
-  @impl true
-  def handle_cast(:expire, dets) do
-    now = System.system_time(:millisecond)
-    match_spec = [{{:_, :_, :"$1"}, [{:<, :"$1", {:const, now}}], [true]}]
-    qty = :dets.select_delete(dets, match_spec)
-    if qty > 0 do
-      Logger.info "#{qty} rows expired"
-    end
-    {:noreply, dets}
   end
 
   def get(key) do
@@ -62,6 +44,23 @@ defmodule KVstore.Storage do
     GenServer.cast(__MODULE__, {:update, key, value, ttl})
   end
 
+  def get_ttl(key) do
+    GenServer.call(__MODULE__, {:get_ttl, key})
+  end
+
+  def exec_ttl() do
+    GenServer.cast(__MODULE__, {:exec_ttl})
+  end
+
+  @impl true
+  def handle_call({:get_ttl, key}, _from, dets) do
+    result = case :dets.lookup(dets, key) do
+      [{_, _, ttl}] -> ttl
+      _ -> nil
+    end
+    {:reply, result, dets}
+  end
+
   @impl true
   def handle_call({:get, key}, _from, dets) do
     result = case :dets.lookup(dets, key) do
@@ -71,22 +70,32 @@ defmodule KVstore.Storage do
     {:reply, result, dets}
   end
 
+  @impl true
   def handle_cast({:delete, key}, dets) do
     :dets.delete(dets, key)
     {:noreply, dets}
   end
 
+  @impl true
   def handle_cast({:create, key, value, ttl}, dets) do
     kv = {key, value, :erlang.system_time(:millisecond) + ttl}
     :dets.insert_new(dets, kv)
+    TTLworker.delete_key_after(key, ttl)
     {:noreply, dets}
   end
 
+  @impl true
   def handle_cast({:update, key, value, ttl}, dets) do
     case :dets.lookup(dets, key) do
       [{_, _, old_ttl}] -> :dets.insert(dets, {key, value, get_ttl(ttl, old_ttl)})
       [] -> nil
     end
+    {:noreply, dets}
+  end
+
+  @impl true
+  def handle_cast({:exec_ttl}, dets) do
+    :dets.traverse(dets, fn(item) -> TTLworker.check_ttl(item) end)
     {:noreply, dets}
   end
 
@@ -101,7 +110,7 @@ defmodule KVstore.Storage do
 
   def get_value(key, value, ttl) do
     if ttl <= :erlang.system_time(:millisecond) do
-      KVstore.delete(key)
+      delete(key)
       []
     else
       value
